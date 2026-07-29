@@ -50,10 +50,9 @@ const Board = (() => {
     currentPlayer = currentPlayer === BLACK ? WHITE : BLACK;
   }
 
-  /** 悔棋（撤销当前玩家的上一手） */
+  /** 悔棋：撤回双方各一手（AI 模式用） */
   function undo() {
     if (history.length === 0) return null;
-    // 双方各悔一手
     const last = history.pop();
     grid[last.y][last.x] = EMPTY;
     if (history.length > 0) {
@@ -63,6 +62,15 @@ const Board = (() => {
     } else {
       currentPlayer = BLACK;
     }
+    return last;
+  }
+
+  /** 悔棋：只撤回上一手（本地/联机模式用） */
+  function undoOne() {
+    if (history.length === 0) return null;
+    const last = history.pop();
+    grid[last.y][last.x] = EMPTY;
+    currentPlayer = last.player;
     return last;
   }
 
@@ -154,7 +162,7 @@ const Board = (() => {
     SIZE, EMPTY, BLACK, WHITE,
     init, getSize, get, getCurrentPlayer,
     placeStone, switchPlayer, checkWin, isDraw,
-    getEmptyCells, reset, undo,
+    getEmptyCells, reset, undo, undoOne,
     getState, loadState,
   };
 })();

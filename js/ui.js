@@ -1,373 +1,285 @@
 /**
  * UI 界面管理模块
- * 负责 Canvas 绘制、屏幕切换、弹窗等
+ * 负责 Canvas 绘制、屏幕切换、玩家卡片、计时显示、弹窗
  */
 const UI = (() => {
-  // DOM 元素
-  let canvas, ctx;
-  let board; // Board 模块引用（由 main.js 设置）
-
+  let canvas, ctx, board;
   const screens = {
     menu: document.getElementById('menu-screen'),
     game: document.getElementById('game-screen'),
     online: document.getElementById('online-screen'),
   };
-
   const elements = {};
 
   // 绘制参数
-  let cellSize = 0;
-  let padding = 20;
-  let boardPixelSize = 0;
-  let lastHighlight = null; // {x, y} 最后落子高亮
-  let hoverPos = null;      // 触摸悬停位置
+  let cellSize = 0, padding = 20, boardPixelSize = 0;
+  let lastHighlight = null;
+  let winLine = null; // {x1,y1,x2,y2} 胜利连线坐标
 
-  /** 初始化 UI，缓存 DOM 引用 */
+  /** 初始化 */
   function init(boardModule) {
     board = boardModule;
     canvas = document.getElementById('board-canvas');
     ctx = canvas.getContext('2d');
 
-    // 缓存常用 DOM 元素
+    // 缓存 DOM 元素
     const ids = [
-      'btn-local', 'btn-ai-easy', 'btn-ai-medium', 'btn-online',
-      'btn-back', 'btn-restart', 'btn-online-back',
-      'btn-create-room', 'btn-join-room', 'btn-copy-room',
-      'btn-play-again', 'btn-to-menu',
-      'current-player', 'status-text', 'room-id-display',
-      'room-info', 'qr-code', 'input-room-id',
-      'join-error', 'win-modal', 'win-text', 'toast',
+      'btn-local','btn-ai-easy','btn-ai-medium','btn-online',
+      'btn-back','btn-undo','btn-restart','btn-online-back',
+      'btn-create-room','btn-join-room','btn-copy-room','btn-paste-room',
+      'btn-play-again','btn-to-menu','btn-request-accept','btn-request-reject',
+      'black-name','black-timer','white-name','white-timer',
+      'black-card','white-card','move-count',
+      'room-id-display','room-info','qr-code','input-room-id',
+      'join-error','win-modal','win-text','request-modal','request-text',
+      'toast','game-hint',
     ];
-    ids.forEach(id => {
-      elements[id] = document.getElementById(id);
-    });
+    ids.forEach(id => { elements[id] = document.getElementById(id); });
 
-    // 尺寸初始化推迟到游戏界面可见时（避免 display:none 时 clientWidth=0）
     window.addEventListener('resize', () => {
-      // 只在游戏界面可见时重绘
-      if (screens.game.classList.contains('active')) {
-        resizeCanvas();
-      }
+      if (screens.game.classList.contains('active')) resizeCanvas();
     });
 
-    // 触摸/鼠标事件
     canvas.addEventListener('click', handleCanvasClick);
     canvas.addEventListener('touchstart', handleCanvasTouch, { passive: false });
 
-    // 按钮事件由 main.js 绑定
-
-    // 注册 Service Worker
     registerSW();
   }
 
-  /** 注册 Service Worker */
   function registerSW() {
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('sw.js').catch((err) => {
-        console.log('[SW] 注册失败（本地开发可忽略）:', err.message);
-      });
+      navigator.serviceWorker.register('sw.js').catch(() => {});
     }
   }
 
   /** 调整 Canvas 尺寸 */
   function resizeCanvas() {
     const wrapper = canvas.parentElement;
-    const maxSize = Math.min(
-      wrapper.clientWidth - 16,
-      window.innerHeight - 120,
-      450
-    );
-
+    const maxSize = Math.min(wrapper.clientWidth - 16, window.innerHeight - 160, 450);
     const dpr = window.devicePixelRatio || 1;
     canvas.width = maxSize * dpr;
     canvas.height = maxSize * dpr;
     canvas.style.width = maxSize + 'px';
     canvas.style.height = maxSize + 'px';
-
     boardPixelSize = maxSize;
     cellSize = (maxSize - padding * 2) / (board.SIZE - 1);
-
     draw();
   }
 
   /** 切换屏幕 */
-  function showScreen(screenName) {
-    Object.keys(screens).forEach(key => {
-      screens[key].classList.toggle('active', key === screenName);
-    });
+  function showScreen(name) {
+    Object.keys(screens).forEach(k => screens[k].classList.toggle('active', k === name));
   }
 
-  /** 绘制棋盘 */
+  /** 绘制棋盘（含胜利连线） */
   function draw() {
     if (!ctx || !canvas) return;
-
     const dpr = window.devicePixelRatio || 1;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.scale(dpr, dpr);
 
-    const w = boardPixelSize;
-    const p = padding;
-    const s = cellSize;
-    const size = board.SIZE;
+    const w = boardPixelSize, p = padding, s = cellSize, size = board.SIZE;
 
-    // 棋盘背景
+    // 棋盘背景 + 木纹
     ctx.fillStyle = '#d4a259';
     ctx.fillRect(0, 0, w, w);
-
-    // 木纹纹理
-    ctx.fillStyle = 'rgba(139, 105, 20, 0.05)';
-    for (let i = 0; i < w; i += 4) {
-      ctx.fillRect(0, i, w, 2);
-    }
+    ctx.fillStyle = 'rgba(139,105,20,0.05)';
+    for (let i = 0; i < w; i += 4) ctx.fillRect(0, i, w, 2);
 
     // 网格线
-    ctx.strokeStyle = '#8b6914';
-    ctx.lineWidth = 1;
-
+    ctx.strokeStyle = '#8b6914'; ctx.lineWidth = 1;
     for (let i = 0; i < size; i++) {
       const pos = p + i * s;
-      // 横线
-      ctx.beginPath();
-      ctx.moveTo(p, pos);
-      ctx.lineTo(p + (size - 1) * s, pos);
-      ctx.stroke();
-      // 竖线
-      ctx.beginPath();
-      ctx.moveTo(pos, p);
-      ctx.lineTo(pos, p + (size - 1) * s);
-      ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(p, pos); ctx.lineTo(p + (size-1)*s, pos); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(pos, p); ctx.lineTo(pos, p + (size-1)*s); ctx.stroke();
     }
 
     // 星位
-    const starPoints = size === 15
-      ? [[3, 3], [7, 3], [11, 3], [3, 7], [7, 7], [11, 7], [3, 11], [7, 11], [11, 11]]
-      : [[Math.floor(size / 2), Math.floor(size / 2)]];
-
-    ctx.fillStyle = '#8b6914';
-    starPoints.forEach(([cx, cy]) => {
-      const sx = p + cx * s;
-      const sy = p + cy * s;
-      ctx.beginPath();
-      ctx.arc(sx, sy, 3, 0, Math.PI * 2);
-      ctx.fill();
+    [[3,3],[7,3],[11,3],[3,7],[7,7],[11,7],[3,11],[7,11],[11,11]].forEach(([cx,cy]) => {
+      ctx.fillStyle = '#8b6914';
+      ctx.beginPath(); ctx.arc(p+cx*s, p+cy*s, 3, 0, Math.PI*2); ctx.fill();
     });
 
     // 棋子
     const grid = board.getState().grid;
-    for (let y = 0; y < size; y++) {
-      for (let x = 0; x < size; x++) {
-        if (grid[y][x] !== board.EMPTY) {
-          drawStone(x, y, grid[y][x], false);
-        }
-      }
-    }
+    for (let y = 0; y < size; y++)
+      for (let x = 0; x < size; x++)
+        if (grid[y][x] !== board.EMPTY) drawStone(x, y, grid[y][x]);
 
     // 最后落子高亮
     if (lastHighlight) {
-      const px = p + lastHighlight.x * s;
-      const py = p + lastHighlight.y * s;
-      ctx.strokeStyle = '#e94560';
-      ctx.lineWidth = 2.5;
-      ctx.beginPath();
-      ctx.arc(px, py, s * 0.48, 0, Math.PI * 2);
-      ctx.stroke();
+      const px = p + lastHighlight.x * s, py = p + lastHighlight.y * s;
+      ctx.strokeStyle = '#e94560'; ctx.lineWidth = 2.5;
+      ctx.beginPath(); ctx.arc(px, py, s*0.48, 0, Math.PI*2); ctx.stroke();
     }
 
-    // 悬停预览（仅在人机对战时对当前玩家显示）
-    if (hoverPos && !lastHighlight) {
-      // 不画悬停预览，保持干净
+    // ★ 胜利连线
+    if (winLine) {
+      const { x1, y1, x2, y2 } = winLine;
+      ctx.strokeStyle = '#e94560'; ctx.lineWidth = 4; ctx.lineCap = 'round';
+      ctx.shadowColor = 'rgba(233,68,96,0.8)'; ctx.shadowBlur = 10;
+      ctx.beginPath();
+      ctx.moveTo(p + x1 * s, p + y1 * s);
+      ctx.lineTo(p + x2 * s, p + y2 * s);
+      ctx.stroke();
+      ctx.shadowBlur = 0;
     }
   }
 
-  /** 绘制棋子 */
-  function drawStone(x, y, player, highlight) {
-    const px = padding + x * cellSize;
-    const py = padding + y * cellSize;
-    const radius = cellSize * 0.44;
-
+  function drawStone(x, y, player) {
+    const px = padding + x * cellSize, py = padding + y * cellSize, r = cellSize * 0.44;
     ctx.save();
-
-    // 阴影
-    ctx.shadowColor = 'rgba(0,0,0,0.4)';
-    ctx.shadowBlur = 3;
-    ctx.shadowOffsetX = 1;
-    ctx.shadowOffsetY = 1;
-
+    ctx.shadowColor = 'rgba(0,0,0,0.4)'; ctx.shadowBlur = 3; ctx.shadowOffsetX = 1; ctx.shadowOffsetY = 1;
     if (player === board.BLACK) {
-      const grad = ctx.createRadialGradient(px - radius * 0.3, py - radius * 0.3, radius * 0.1, px, py, radius);
-      grad.addColorStop(0, '#555');
-      grad.addColorStop(1, '#111');
-      ctx.fillStyle = grad;
+      const g = ctx.createRadialGradient(px-r*0.3, py-r*0.3, r*0.1, px, py, r);
+      g.addColorStop(0,'#555'); g.addColorStop(1,'#111');
+      ctx.fillStyle = g;
     } else {
-      const grad = ctx.createRadialGradient(px - radius * 0.3, py - radius * 0.3, radius * 0.1, px, py, radius);
-      grad.addColorStop(0, '#fff');
-      grad.addColorStop(1, '#bbb');
-      ctx.fillStyle = grad;
+      const g = ctx.createRadialGradient(px-r*0.3, py-r*0.3, r*0.1, px, py, r);
+      g.addColorStop(0,'#fff'); g.addColorStop(1,'#bbb');
+      ctx.fillStyle = g;
     }
-
-    ctx.beginPath();
-    ctx.arc(px, py, radius, 0, Math.PI * 2);
-    ctx.fill();
-
+    ctx.beginPath(); ctx.arc(px, py, r, 0, Math.PI*2); ctx.fill();
     ctx.restore();
   }
 
   /** Canvas 点击处理 */
-  function handleCanvasClick(e) {
-    const pos = getGridPos(e);
-    if (pos) {
-      handleMove(pos.x, pos.y);
-    }
-  }
+  function handleCanvasClick(e) { const p = getGridPos(e); if (p) handleMove(p.x, p.y); }
+  function handleCanvasTouch(e) { e.preventDefault(); const p = getGridPos(e.touches[0]); if (p) handleMove(p.x, p.y); }
 
-  /** Canvas 触摸处理 */
-  function handleCanvasTouch(e) {
-    e.preventDefault();
-    const pos = getGridPos(e.touches[0]);
-    if (pos) {
-      handleMove(pos.x, pos.y);
-    }
-  }
-
-  /** 从鼠标/触摸事件获取棋盘坐标 */
   function getGridPos(e) {
     const rect = canvas.getBoundingClientRect();
-    const scaleX = boardPixelSize / rect.width;
-    const scaleY = boardPixelSize / rect.height;
-    const mx = (e.clientX - rect.left) * scaleX;
-    const my = (e.clientY - rect.top) * scaleY;
-
-    const col = Math.round((mx - padding) / cellSize);
-    const row = Math.round((my - padding) / cellSize);
-
+    const scaleX = boardPixelSize / rect.width, scaleY = boardPixelSize / rect.height;
+    const mx = (e.clientX - rect.left) * scaleX, my = (e.clientY - rect.top) * scaleY;
+    const col = Math.round((mx - padding) / cellSize), row = Math.round((my - padding) / cellSize);
     if (col < 0 || col >= board.SIZE || row < 0 || row >= board.SIZE) return null;
-
-    // 检查是否离交叉点足够近
-    const px = padding + col * cellSize;
-    const py = padding + row * cellSize;
-    const dist = Math.sqrt((mx - px) ** 2 + (my - py) ** 2);
-
-    if (dist > cellSize * 0.45) return null;
-
+    const px = padding + col * cellSize, py = padding + row * cellSize;
+    if (Math.hypot(mx - px, my - py) > cellSize * 0.45) return null;
     return { x: col, y: row };
   }
 
-  // 落子回调（由 main.js 设置）
   let onMoveCallback = null;
-  function onMove(callback) {
-    onMoveCallback = callback;
-  }
+  function onMove(cb) { onMoveCallback = cb; }
+  function handleMove(x, y) { if (onMoveCallback) onMoveCallback(x, y); }
 
-  function handleMove(x, y) {
-    if (onMoveCallback) {
-      onMoveCallback(x, y);
+  /** 棋子高亮与胜利连线 */
+  function setHighlight(x, y) { lastHighlight = { x, y }; draw(); }
+  function clearHighlight() { lastHighlight = null; draw(); }
+
+  /** 设置并绘制胜利连线 */
+  function setWinLine(x, y, player) {
+    const grid = board.getState().grid;
+    const dirs = [[1,0],[0,1],[1,1],[1,-1]];
+    for (const [dx,dy] of dirs) {
+      let minX = x, maxX = x, minY = y, maxY = y;
+      for (let i = 1; i < 5; i++) {
+        const nx = x + dx*i, ny = y + dy*i;
+        if (board.get(nx, ny) === player) { minX = Math.min(minX,nx); maxX = Math.max(maxX,nx); minY = Math.min(minY,ny); maxY = Math.max(maxY,ny); }
+        else break;
+      }
+      for (let i = 1; i < 5; i++) {
+        const nx = x - dx*i, ny = y - dy*i;
+        if (board.get(nx, ny) === player) { minX = Math.min(minX,nx); maxX = Math.max(maxX,nx); minY = Math.min(minY,ny); maxY = Math.max(maxY,ny); }
+        else break;
+      }
+      if (maxX - minX >= 4 || maxY - minY >= 4 || (maxX-minX)+(maxY-minY) >= 4) {
+        winLine = { x1: minX, y1: minY, x2: maxX, y2: maxY };
+        draw();
+        return;
+      }
     }
   }
+  function clearWinLine() { winLine = null; draw(); }
 
-  /** 设置高亮位置并重绘 */
-  function setHighlight(x, y) {
-    lastHighlight = { x, y };
-    draw();
+  /** 玩家卡片更新 */
+  function setPlayerCards(bName, bTimer, wName, wTimer, activePlayer) {
+    elements['black-name'].textContent = bName;
+    elements['black-timer'].textContent = bTimer;
+    elements['white-name'].textContent = wName;
+    elements['white-timer'].textContent = wTimer;
+
+    const bCard = elements['black-card'], wCard = elements['white-card'];
+    bCard.classList.toggle('active', activePlayer === board.BLACK);
+    wCard.classList.toggle('active', activePlayer === board.WHITE);
   }
 
-  /** 清除高亮 */
-  function clearHighlight() {
-    lastHighlight = null;
-    draw();
+  /** 计时器更新（仅更新时间数字） */
+  function updateTimerDisplay(player, timeStr) {
+    const el = player === board.BLACK ? elements['black-timer'] : elements['white-timer'];
+    el.textContent = timeStr;
   }
 
-  /** 更新状态栏 */
-  function updateStatus(player, text) {
-    const indicator = elements['current-player'];
-    const statusText = elements['status-text'];
-
-    indicator.className = 'stone-indicator ' + (player === board.BLACK ? 'black' : 'white');
-    statusText.textContent = text;
+  /** 计时器紧急状态 */
+  function setTimerUrgent(player, urgent) {
+    const el = player === board.BLACK ? elements['black-timer'] : elements['white-timer'];
+    el.classList.toggle('urgent', urgent);
   }
 
-  /** 显示胜利弹窗 */
+  /** 手数显示 */
+  function setMoveCount(n) { elements['move-count'].textContent = '第 ' + n + ' 手'; }
+
+  /** 底部提示 */
+  function setHint(text) { elements['game-hint'].textContent = text || ''; }
+
+  /** 胜利弹窗 */
   function showWin(player, isOnline) {
     let text;
-    if (player === board.BLACK) {
-      text = isOnline ? '⚫ 黑棋获胜！' : '⚫ 黑棋获胜！';
-    } else if (player === board.WHITE) {
-      text = isOnline ? '⚪ 白棋获胜！' : '⚪ 白棋获胜！';
-    } else {
-      text = '🤝 平局！';
-    }
-
+    if (player === board.BLACK) text = '⚫ 黑棋获胜！';
+    else if (player === board.WHITE) text = '⚪ 白棋获胜！';
+    else text = '🤝 平局！';
     elements['win-text'].textContent = text;
     elements['win-modal'].classList.remove('hidden');
+    // 联机模式下胜利弹窗不需要"再来一局"按钮（需对手同意）
+    const playAgainBtn = elements['btn-play-again'];
+    if (isOnline) {
+      playAgainBtn.textContent = '申请重来';
+    } else {
+      playAgainBtn.textContent = '再来一局';
+    }
+  }
+  function hideWin() { elements['win-modal'].classList.add('hidden'); }
+
+  /** 请求弹窗（联机悔棋/重来） */
+  function showRequest(text) {
+    elements['request-text'].textContent = text;
+    elements['request-modal'].classList.remove('hidden');
+  }
+  function hideRequest() { elements['request-modal'].classList.add('hidden'); }
+
+  /** Toast */
+  function showToast(msg, dur = 2000) {
+    const t = elements['toast']; t.textContent = msg; t.classList.remove('hidden');
+    clearTimeout(t._t); t._t = setTimeout(() => t.classList.add('hidden'), dur);
   }
 
-  /** 隐藏胜利弹窗 */
-  function hideWin() {
-    elements['win-modal'].classList.add('hidden');
-  }
-
-  /** 显示 Toast */
-  function showToast(message, duration = 2000) {
-    const toast = elements['toast'];
-    toast.textContent = message;
-    toast.classList.remove('hidden');
-    clearTimeout(toast._timeout);
-    toast._timeout = setTimeout(() => {
-      toast.classList.add('hidden');
-    }, duration);
-  }
-
-  /** 显示/隐藏房间信息 */
+  /** 房间信息 */
   function showRoomInfo(roomId) {
     elements['room-id-display'].textContent = roomId;
     elements['room-info'].classList.remove('hidden');
-
-    // 生成 QR 码
-    const qrContainer = elements['qr-code'];
-    qrContainer.innerHTML = '';
+    const qr = elements['qr-code']; qr.innerHTML = '';
     if (typeof QRCode !== 'undefined') {
-      const url = location.origin + location.pathname + '?room=' + roomId;
-      new QRCode(qrContainer, {
-        text: url,
-        width: 140,
-        height: 140,
-        colorDark: '#1a1a2e',
-        colorLight: '#ffffff',
-      });
+      new QRCode(qr, { text: location.origin + location.pathname + '?room=' + roomId, width: 140, height: 140, colorDark: '#1a1a2e', colorLight: '#ffffff' });
     }
   }
-
-  /** 隐藏房间信息 */
   function hideRoomInfo() {
     elements['room-info'].classList.add('hidden');
-    const qrContainer = elements['qr-code'];
-    qrContainer.innerHTML = '';
+    elements['qr-code'].innerHTML = '';
   }
-
-  /** 显示加入错误 */
   function showJoinError(msg) {
-    const el = elements['join-error'];
-    el.textContent = msg;
-    el.classList.remove('hidden');
+    const el = elements['join-error']; el.textContent = msg; el.classList.remove('hidden');
     setTimeout(() => el.classList.add('hidden'), 4000);
   }
-
-  /** 获取输入的房间号 */
-  function getInputRoomId() {
-    return elements['input-room-id'].value.trim();
-  }
-
-  /** 获取 DOM 元素引用 */
-  function getElement(id) {
-    return elements[id];
-  }
+  function getInputRoomId() { return elements['input-room-id'].value.trim(); }
+  function getElement(id) { return elements[id]; }
 
   return {
-    init, draw, showScreen, setHighlight, clearHighlight,
-    updateStatus, showWin, hideWin, showToast,
-    showRoomInfo, hideRoomInfo, showJoinError,
-    getInputRoomId, getElement,
-    onMove,
-    resizeCanvas,
+    init, draw, showScreen, resizeCanvas,
+    setHighlight, clearHighlight, setWinLine, clearWinLine,
+    setPlayerCards, updateTimerDisplay, setTimerUrgent,
+    setMoveCount, setHint,
+    showWin, hideWin, showRequest, hideRequest,
+    showToast, showRoomInfo, hideRoomInfo, showJoinError,
+    getInputRoomId, getElement, onMove,
   };
 })();

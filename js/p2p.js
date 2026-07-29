@@ -122,6 +122,14 @@ const P2P = (() => {
       onMove(data.x, data.y);
     } else if (data.type === 'restart' && onMove) {
       onMove('restart');
+    } else if (data.type === 'undo_request' && onMove) {
+      onMove('undo_request');
+    } else if (data.type === 'undo_response' && onMove) {
+      onMove('undo_response', data.accept);
+    } else if (data.type === 'rematch_request' && onMove) {
+      onMove('rematch_request');
+    } else if (data.type === 'rematch_response' && onMove) {
+      onMove('rematch_response', data.accept);
     }
   }
 
@@ -143,6 +151,34 @@ const P2P = (() => {
   function sendRestart() {
     if (!connection || !isConnected) return false;
     connection.send({ type: 'restart' });
+    return true;
+  }
+
+  /** 发送悔棋申请 */
+  function sendUndoRequest() {
+    if (!connection || !isConnected) return false;
+    connection.send({ type: 'undo_request' });
+    return true;
+  }
+
+  /** 发送悔棋响应 */
+  function sendUndoResponse(accept) {
+    if (!connection || !isConnected) return false;
+    connection.send({ type: 'undo_response', accept });
+    return true;
+  }
+
+  /** 发送重来申请 */
+  function sendRematchRequest() {
+    if (!connection || !isConnected) return false;
+    connection.send({ type: 'rematch_request' });
+    return true;
+  }
+
+  /** 发送重来响应 */
+  function sendRematchResponse(accept) {
+    if (!connection || !isConnected) return false;
+    connection.send({ type: 'rematch_response', accept });
     return true;
   }
 
@@ -181,6 +217,10 @@ const P2P = (() => {
     joinRoom,
     sendMove,
     sendRestart,
+    sendUndoRequest,
+    sendUndoResponse,
+    sendRematchRequest,
+    sendRematchResponse,
     getStatus,
     getRoomId,
     disconnect,

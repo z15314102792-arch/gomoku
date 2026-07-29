@@ -20,20 +20,16 @@
       <p class="subtitle">经典策略棋类游戏</p>
       <div class="menu-buttons">
         <button id="btn-local" class="btn btn-primary">
-          <span class="btn-icon">👥</span>
-          <span>本地双人</span>
+          <span class="btn-icon">👥</span><span>本地双人</span>
         </button>
         <button id="btn-ai-easy" class="btn btn-secondary">
-          <span class="btn-icon">🤖</span>
-          <span>人机对战 · 简单</span>
+          <span class="btn-icon">🤖</span><span>人机对战 · 简单</span>
         </button>
         <button id="btn-ai-medium" class="btn btn-secondary">
-          <span class="btn-icon">🧠</span>
-          <span>人机对战 · 中等</span>
+          <span class="btn-icon">🧠</span><span>人机对战 · 中等</span>
         </button>
         <button id="btn-online" class="btn btn-accent">
-          <span class="btn-icon">🌐</span>
-          <span>联机对战</span>
+          <span class="btn-icon">🌐</span><span>联机对战</span>
         </button>
       </div>
     </div>
@@ -41,16 +37,47 @@
 
   <!-- 游戏界面 -->
   <div id="game-screen" class="screen">
+    <!-- 顶部：双方玩家卡片 + 操作按钮 -->
     <div class="game-header">
-      <button id="btn-back" class="btn-back">← 返回</button>
-      <div class="status-bar">
-        <span id="current-player" class="stone-indicator"></span>
-        <span id="status-text"></span>
+      <button id="btn-back" class="btn-icon-only" title="返回">←</button>
+
+      <!-- 黑方卡片 -->
+      <div class="player-card" id="black-card">
+        <div class="player-avatar black-avatar"></div>
+        <div class="player-meta">
+          <span class="player-name" id="black-name">黑方</span>
+          <span class="player-timer" id="black-timer">0:30</span>
+        </div>
       </div>
-      <button id="btn-restart" class="btn-restart">🔄</button>
+
+      <!-- 中间：手数 -->
+      <div class="move-badge">
+        <span id="move-count">第 1 手</span>
+      </div>
+
+      <!-- 白方卡片 -->
+      <div class="player-card" id="white-card">
+        <div class="player-avatar white-avatar"></div>
+        <div class="player-meta">
+          <span class="player-name" id="white-name">白方</span>
+          <span class="player-timer" id="white-timer">0:30</span>
+        </div>
+      </div>
+
+      <!-- 右侧操作按钮 -->
+      <div class="header-actions">
+        <button id="btn-undo" class="btn-icon-only" title="悔棋">↩</button>
+        <button id="btn-restart" class="btn-icon-only" title="重新开始">🔄</button>
+      </div>
     </div>
+
     <div class="board-wrapper">
       <canvas id="board-canvas"></canvas>
+    </div>
+
+    <!-- 游戏底部提示 -->
+    <div class="game-footer">
+      <span id="game-hint"></span>
     </div>
   </div>
 
@@ -72,9 +99,7 @@
           <p class="waiting-text">等待对手加入…</p>
         </div>
       </div>
-      <div class="divider">
-        <span>或</span>
-      </div>
+      <div class="divider"><span>或</span></div>
       <div class="online-section">
         <h3>加入房间</h3>
         <p class="online-desc">输入朋友分享的房间号</p>
@@ -99,7 +124,18 @@
     </div>
   </div>
 
-  <!-- 连接状态提示 -->
+  <!-- 请求弹窗（联机悔棋/重来申请） -->
+  <div id="request-modal" class="modal hidden">
+    <div class="modal-content">
+      <h2 id="request-text"></h2>
+      <div class="modal-buttons">
+        <button id="btn-request-accept" class="btn btn-primary">同意</button>
+        <button id="btn-request-reject" class="btn btn-secondary">拒绝</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast -->
   <div id="toast" class="toast hidden"></div>
 
   <!-- PeerJS -->

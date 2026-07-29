@@ -1,263 +1,368 @@
 /**
- * 主控制器 - 游戏流程控制
- * 管理状态机和各模块之间的协调
+ * 主控制器 —— 游戏流程、计时器、悔棋、重来
+ *
+ * 计时规则：每步 30 秒，超时判负。最后 10 秒红闪警告。
+ * 使用 Date.now() 计算实际流逝时间，避免 setInterval 漂移。
  */
 const Main = (() => {
-  // 游戏模式
+  const MOVE_TIME = 30; // 秒
+
   const MODE = {
-    LOCAL: 'local',       // 本地双人
-    AI_EASY: 'ai-easy',     // 人机简单（评分策略，无前瞻）
-    AI_MEDIUM: 'ai-medium', // 人机中等（1层前瞻 minimax）
-    ONLINE: 'online',     // 联机对战
+    LOCAL: 'local',
+    AI_EASY: 'ai-easy',
+    AI_MEDIUM: 'ai-medium',
+    ONLINE: 'online',
   };
 
   let currentMode = null;
   let gameOver = false;
-  let isMyTurn = true;      // 联机模式下是否是我方回合
-  let onlinePlayerColor = null; // 联机中我方的颜色
-  let aiThinking = false;   // AI 是否正在思考
+  let isMyTurn = true;
+  let onlinePlayerColor = null;
+  let aiThinking = false;
+
+  // 计时器
+  let timerDeadline = 0;    // 当前回合到期时间戳 (Date.now() + MOVE_TIME*1000)
+  let timerInterval = null;
+  let timerPlayer = null;   // 当前计时的玩家
+
+  // 联机请求状态（防止重复弹窗）
+  let pendingRequest = null; // 'undo' | 'rematch' | null
 
   /** 初始化 */
   function init() {
-    // UI 初始化，传入 Board 模块
     UI.init(Board);
-
-    // 绑定 UI 落子回调
     UI.onMove(handlePlayerMove);
-
-    // 绑定按钮事件
     bindButtons();
-
-    // 绑定胜利弹窗按钮
-    UI.getElement('btn-play-again').addEventListener('click', restartGame);
+    UI.getElement('btn-play-again').addEventListener('click', handlePlayAgain);
     UI.getElement('btn-to-menu').addEventListener('click', goToMenu);
-
-    // 检查 URL 参数（联机房间号）
+    UI.getElement('btn-request-accept').addEventListener('click', () => acceptRequest());
+    UI.getElement('btn-request-reject').addEventListener('click', () => rejectRequest());
     checkURLParams();
-
-    // 显示菜单
     UI.showScreen('menu');
     console.log('[Main] 五子棋已就绪');
   }
 
-  /** 绑定所有按钮事件 */
   function bindButtons() {
-    // 主菜单按钮
     UI.getElement('btn-local').addEventListener('click', () => startGame(MODE.LOCAL));
     UI.getElement('btn-ai-easy').addEventListener('click', () => startGame(MODE.AI_EASY));
     UI.getElement('btn-ai-medium').addEventListener('click', () => startGame(MODE.AI_MEDIUM));
     UI.getElement('btn-online').addEventListener('click', showOnlineScreen);
-
-    // 游戏界面按钮
     UI.getElement('btn-back').addEventListener('click', confirmBack);
-    UI.getElement('btn-restart').addEventListener('click', restartGame);
-
-    // 联机界面按钮
-    UI.getElement('btn-online-back').addEventListener('click', () => {
-      P2P.disconnect();
-      UI.showScreen('menu');
-    });
+    UI.getElement('btn-undo').addEventListener('click', handleUndo);
+    UI.getElement('btn-restart').addEventListener('click', handleRestart);
+    UI.getElement('btn-online-back').addEventListener('click', () => { P2P.disconnect(); UI.showScreen('menu'); });
     UI.getElement('btn-create-room').addEventListener('click', handleCreateRoom);
     UI.getElement('btn-join-room').addEventListener('click', handleJoinRoom);
     UI.getElement('btn-copy-room').addEventListener('click', handleCopyRoom);
     UI.getElement('btn-paste-room').addEventListener('click', handlePasteRoom);
   }
 
-  /** 开始游戏 */
+  // ==================== 计时器 ====================
+
+  function startTimer(player) {
+    stopTimer();
+    timerPlayer = player;
+    timerDeadline = Date.now() + MOVE_TIME * 1000;
+    updateTimerDisplay();
+
+    timerInterval = setInterval(() => {
+      const remaining = Math.max(0, Math.ceil((timerDeadline - Date.now()) / 1000));
+      const min = Math.floor(remaining / 60);
+      const sec = remaining % 60;
+      const str = min + ':' + String(sec).padStart(2, '0');
+      UI.updateTimerDisplay(player, str);
+      UI.setTimerUrgent(player, remaining <= 10 && remaining > 0);
+
+      if (remaining <= 0) {
+        handleTimeout(player);
+      }
+    }, 200);
+  }
+
+  function stopTimer() {
+    if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+    timerPlayer = null;
+    // 清除紧急状态
+    UI.setTimerUrgent(Board.BLACK, false);
+    UI.setTimerUrgent(Board.WHITE, false);
+  }
+
+  function updateTimerDisplay() {
+    if (!timerPlayer) return;
+    const remaining = Math.max(0, Math.ceil((timerDeadline - Date.now()) / 1000));
+    const min = Math.floor(remaining / 60);
+    const sec = remaining % 60;
+    UI.updateTimerDisplay(timerPlayer, min + ':' + String(sec).padStart(2, '0'));
+  }
+
+  function handleTimeout(player) {
+    stopTimer();
+    gameOver = true;
+    const winner = player === Board.BLACK ? Board.WHITE : Board.BLACK;
+    UI.setHint('⏰ ' + (player === Board.BLACK ? '黑方' : '白方') + '超时！');
+    setTimeout(() => {
+      UI.showWin(winner, currentMode === MODE.ONLINE);
+      if (winner) {
+        const last = Board.getState().history;
+        if (last.length > 0) {
+          const final = last[last.length - 1];
+          UI.setWinLine(final.x, final.y, winner);
+        }
+      }
+    }, 400);
+  }
+
+  // ==================== 游戏流程 ====================
+
   function startGame(mode) {
     currentMode = mode;
     gameOver = false;
     aiThinking = false;
+    pendingRequest = null;
     Board.reset();
     UI.clearHighlight();
+    UI.clearWinLine();
     UI.hideWin();
+    UI.hideRequest();
+    UI.setHint('');
     UI.showScreen('game');
-    // 界面可见后再计算 Canvas 尺寸（之前 display:none 导致 clientWidth=0）
     UI.resizeCanvas();
 
-    if (mode === MODE.LOCAL) {
-      isMyTurn = true;
-      updateGameStatus();
-    } else if (mode === MODE.AI_EASY || mode === MODE.AI_MEDIUM) {
-      isMyTurn = true; // 玩家先手（黑棋）
-      updateGameStatus();
-    }
+    isMyTurn = true;
+    updatePlayerCards();
+    UI.setMoveCount(1);
+
+    // 黑方先手，启动黑方计时
+    startTimer(Board.BLACK);
   }
 
-  /** 更新游戏状态栏 */
-  function updateGameStatus() {
-    const player = Board.getCurrentPlayer();
-    const playerName = player === Board.BLACK ? '黑棋' : '白棋';
+  /** 更新双方玩家卡片 */
+  function updatePlayerCards() {
+    const bName = getPlayerName(Board.BLACK);
+    const wName = getPlayerName(Board.WHITE);
+    const activePlayer = gameOver ? null : Board.getCurrentPlayer();
+    UI.setPlayerCards(bName, formatTime(MOVE_TIME), wName, formatTime(MOVE_TIME), activePlayer);
+  }
 
-    let extra = '';
+  function getPlayerName(player) {
     if (currentMode === MODE.LOCAL) {
-      extra = ' — 本地双人';
-    } else if (currentMode === MODE.AI_EASY || currentMode === MODE.AI_MEDIUM) {
-      const diffName = currentMode === MODE.AI_EASY ? '简单' : '中等';
-      if (aiThinking) {
-        extra = ` — AI 思考中（${diffName}）`;
-      } else {
-        extra = ` — 你对 AI（${diffName}）`;
-      }
-    } else if (currentMode === MODE.ONLINE) {
-      const youAre = onlinePlayerColor === Board.BLACK ? '黑棋' : '白棋';
-      const turn = isMyTurn ? '你的回合' : '等待对手';
-      extra = ` — 你执${youAre} · ${turn}`;
+      return player === Board.BLACK ? '玩家 1' : '玩家 2';
     }
-
-    UI.updateStatus(player, playerName + extra);
+    if (currentMode === MODE.AI_EASY || currentMode === MODE.AI_MEDIUM) {
+      return player === Board.BLACK ? '你' : 'AI';
+    }
+    if (currentMode === MODE.ONLINE) {
+      if (player === onlinePlayerColor) return '你';
+      return '对手';
+    }
+    return player === Board.BLACK ? '黑方' : '白方';
   }
 
-  /** 处理玩家落子 */
-  function handlePlayerMove(x, y) {
-    if (gameOver) return;
-    if (aiThinking) return;
+  function formatTime(sec) {
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return m + ':' + String(s).padStart(2, '0');
+  }
 
-    // 联机模式：必须是我方回合
+  // ==================== 落子处理 ====================
+
+  function handlePlayerMove(x, y) {
+    if (gameOver || aiThinking) return;
     if (currentMode === MODE.ONLINE && !isMyTurn) {
       UI.showToast('等待对手落子…');
       return;
     }
-
-    // 本地或人机模式
     if (!tryPlaceStone(x, y)) return;
-
-    // 联机模式发送坐标
-    if (currentMode === MODE.ONLINE) {
-      P2P.sendMove(x, y);
-    }
+    if (currentMode === MODE.ONLINE) P2P.sendMove(x, y);
   }
 
-  /** 尝试落子并处理后续逻辑 */
   function tryPlaceStone(x, y) {
     if (!Board.placeStone(x, y)) return false;
 
-    const player = Board.getCurrentPlayer();
     UI.setHighlight(x, y);
+    UI.setMoveCount(Board.getState().history.length);
 
     // 检查胜负
     const winner = Board.checkWin(x, y);
     if (winner) {
       gameOver = true;
-      setTimeout(() => {
-        const isOnline = currentMode === MODE.ONLINE;
-        UI.showWin(winner, isOnline);
-      }, 300);
+      stopTimer();
+      updatePlayerCards();
+      UI.setWinLine(x, y, winner);
+      setTimeout(() => UI.showWin(winner, currentMode === MODE.ONLINE), 300);
       return true;
     }
 
-    // 检查平局
     if (Board.isDraw()) {
       gameOver = true;
+      stopTimer();
+      updatePlayerCards();
       setTimeout(() => UI.showWin(null, false), 300);
       return true;
     }
 
     // 切换玩家
     Board.switchPlayer();
-    updateGameStatus();
+    updatePlayerCards();
 
-    // AI 模式：触发 AI 落子
+    // 重启对方计时器
+    if (!gameOver) startTimer(Board.getCurrentPlayer());
+
+    // AI 模式
     if (!gameOver && (currentMode === MODE.AI_EASY || currentMode === MODE.AI_MEDIUM)) {
       aiThinking = true;
       const difficulty = currentMode === MODE.AI_EASY ? 'normal' : 'hard';
-      // 延迟 1 秒再落子，模拟人类思考节奏
+      stopTimer(); // AI 思考期间暂停计时
       setTimeout(() => {
         const move = AI.getMove(Board, difficulty);
         if (move) {
           Board.placeStone(move.x, move.y);
           UI.setHighlight(move.x, move.y);
+          UI.setMoveCount(Board.getState().history.length);
 
           const aiWinner = Board.checkWin(move.x, move.y);
           if (aiWinner) {
             gameOver = true;
+            stopTimer();
+            updatePlayerCards();
+            UI.setWinLine(move.x, move.y, aiWinner);
             setTimeout(() => UI.showWin(aiWinner, false), 300);
           } else if (Board.isDraw()) {
             gameOver = true;
+            stopTimer();
+            updatePlayerCards();
             setTimeout(() => UI.showWin(null, false), 300);
           } else {
             Board.switchPlayer();
+            updatePlayerCards();
+            startTimer(Board.getCurrentPlayer()); // 恢复玩家计时
           }
         }
-        updateGameStatus();
         aiThinking = false;
       }, 1000);
     }
 
     // 联机模式：切换回合
-    if (currentMode === MODE.ONLINE) {
+    if (currentMode === MODE.ONLINE && !gameOver) {
       isMyTurn = false;
-      updateGameStatus();
     }
 
     return true;
   }
 
-  /** 重新开始（notifyPeer=false 时不通知对方，避免接收端重启信号再次发送形成循环） */
-  function restartGame(notifyPeer = true) {
-    if (currentMode === MODE.ONLINE && notifyPeer) {
-      P2P.sendRestart();
+  // ==================== 悔棋 ====================
+
+  function handleUndo() {
+    if (gameOver || aiThinking) return;
+    if (Board.getState().history.length === 0) {
+      UI.showToast('没有可悔的棋');
+      return;
     }
 
-    gameOver = false;
-    aiThinking = false;
-    Board.reset();
-    UI.clearHighlight();
-    UI.hideWin();
+    if (currentMode === MODE.LOCAL) {
+      doLocalUndo();
+    } else if (currentMode === MODE.AI_EASY || currentMode === MODE.AI_MEDIUM) {
+      // AI 模式：撤回玩家+AI 各一手（使用 Board.undo()）
+      doAiUndo();
+    } else if (currentMode === MODE.ONLINE) {
+      // 只有自己回合才能申请悔棋
+      if (!isMyTurn) { UI.showToast('只有你的回合才能申请悔棋'); return; }
+      if (pendingRequest) { UI.showToast('已有待处理请求'); return; }
+      P2P.sendUndoRequest();
+      pendingRequest = 'undo';
+      UI.showToast('已发送悔棋申请，等待回复…', 5000);
+    }
+  }
 
+  /** 本地模式悔棋：撤回一手 */
+  function doLocalUndo() {
+    stopTimer();
+    Board.undoOne();
+    UI.clearHighlight();
+    UI.clearWinLine();
+    UI.setMoveCount(Board.getState().history.length);
+    updatePlayerCards();
+    UI.setHint('已悔棋');
+    setTimeout(() => UI.setHint(''), 2000);
+    if (!gameOver) startTimer(Board.getCurrentPlayer());
+  }
+
+  /** AI 模式悔棋：撤回玩家+AI 各一手 */
+  function doAiUndo() {
+    stopTimer();
+    Board.undo(); // 撤回两步（玩家+AI）
+    UI.clearHighlight();
+    UI.clearWinLine();
+    UI.setMoveCount(Board.getState().history.length);
+    updatePlayerCards();
+    UI.setHint('已悔棋');
+    setTimeout(() => UI.setHint(''), 2000);
+    if (!gameOver) startTimer(Board.getCurrentPlayer());
+  }
+
+  /** 联机模式悔棋：撤回对手最后一步 + 自己上一步（共两步） */
+  function doOnlineUndo() {
+    stopTimer();
+    Board.undo(); // 撤回双方各一手
+    isMyTurn = true; // 悔棋后必然是申请方（当前回合方）的回合
+    UI.clearHighlight();
+    UI.clearWinLine();
+    UI.setMoveCount(Board.getState().history.length);
+    updatePlayerCards();
+    UI.setHint('已悔棋');
+    setTimeout(() => UI.setHint(''), 2000);
+    if (!gameOver) startTimer(Board.getCurrentPlayer());
+  }
+
+  // ==================== 重新开始 ====================
+
+  function handleRestart() {
+    if (gameOver) {
+      // 游戏已结束，直接重来
+      if (currentMode === MODE.ONLINE) {
+        P2P.sendRematchRequest();
+        pendingRequest = 'rematch';
+        UI.showToast('已发送重来申请，等待回复…', 5000);
+      } else {
+        startGame(currentMode);
+      }
+      return;
+    }
+
+    // 游戏中，确认重来
+    if (currentMode === MODE.LOCAL || currentMode === MODE.AI_EASY || currentMode === MODE.AI_MEDIUM) {
+      startGame(currentMode);
+    } else if (currentMode === MODE.ONLINE) {
+      if (pendingRequest) { UI.showToast('已有待处理请求'); return; }
+      P2P.sendRematchRequest();
+      pendingRequest = 'rematch';
+      UI.showToast('已发送重来申请，等待回复…', 5000);
+    }
+  }
+
+  function handlePlayAgain() {
     if (currentMode === MODE.ONLINE) {
-      isMyTurn = (onlinePlayerColor === Board.BLACK); // 黑棋先手
+      // 联机：发送重来申请
+      P2P.sendRematchRequest();
+      pendingRequest = 'rematch';
+      UI.hideWin();
+      UI.showToast('已发送重来申请，等待回复…', 5000);
     } else {
-      isMyTurn = true;
+      startGame(currentMode);
     }
-
-    updateGameStatus();
-    UI.showScreen('game');
   }
 
-  /** 返回菜单确认 */
-  function confirmBack() {
-    if (currentMode === MODE.ONLINE) {
-      P2P.disconnect();
-    }
-    gameOver = false;
-    aiThinking = false;
-    Board.reset();
-    UI.clearHighlight();
-    UI.hideWin();
-    UI.showScreen('menu');
-  }
+  // ==================== 联机 ====================
 
-  function goToMenu() {
-    if (currentMode === MODE.ONLINE) {
-      P2P.disconnect();
-    }
-    gameOver = false;
-    aiThinking = false;
-    Board.reset();
-    UI.clearHighlight();
-    UI.hideWin();
-    UI.showScreen('menu');
-  }
-
-  // ========== 联机相关 ==========
-
-  /** 显示联机界面 */
   function showOnlineScreen() {
     UI.hideRoomInfo();
     UI.showScreen('online');
     UI.getElement('input-room-id').value = '';
     UI.getElement('join-error').classList.add('hidden');
-
-    // 重置按钮状态（防止上次操作残留的 disabled/文字）
-    const createBtn = UI.getElement('btn-create-room');
-    createBtn.disabled = false;
-    createBtn.textContent = '创建房间';
-    const joinBtn = UI.getElement('btn-join-room');
-    joinBtn.disabled = false;
-    joinBtn.textContent = '加入';
-
-    // 初始化 P2P
+    UI.getElement('btn-create-room').disabled = false;
+    UI.getElement('btn-create-room').textContent = '创建房间';
+    UI.getElement('btn-join-room').disabled = false;
+    UI.getElement('btn-join-room').textContent = '加入';
     P2P.init({
       onConnected: onP2PConnected,
       onDisconnected: onP2PDisconnected,
@@ -266,163 +371,206 @@ const Main = (() => {
     });
   }
 
-  /** 创建房间 */
   async function handleCreateRoom() {
     try {
       const btn = UI.getElement('btn-create-room');
-      btn.disabled = true;
-      btn.textContent = '创建中…';
-
+      btn.disabled = true; btn.textContent = '创建中…';
       await P2P.createRoom();
-      const roomId = P2P.getRoomId();
-      UI.showRoomInfo(roomId);
+      UI.showRoomInfo(P2P.getRoomId());
       btn.textContent = '房间已创建';
     } catch (err) {
-      console.error('[Main] 创建房间失败:', err);
       UI.showToast('创建房间失败，请重试');
       const btn = UI.getElement('btn-create-room');
-      btn.disabled = false;
-      btn.textContent = '创建房间';
+      btn.disabled = false; btn.textContent = '创建房间';
     }
   }
 
-  /** 加入房间 */
   async function handleJoinRoom() {
     const roomId = UI.getInputRoomId();
-    if (!roomId) {
-      UI.showJoinError('请输入房间号');
-      return;
-    }
-
+    if (!roomId) { UI.showJoinError('请输入房间号'); return; }
     try {
       const btn = UI.getElement('btn-join-room');
-      btn.disabled = true;
-      btn.textContent = '连接中…';
-
+      btn.disabled = true; btn.textContent = '连接中…';
       await P2P.joinRoom(roomId);
       btn.textContent = '已连接';
     } catch (err) {
-      console.error('[Main] 加入房间失败:', err);
       UI.showJoinError(err.message || '加入房间失败');
       const btn = UI.getElement('btn-join-room');
-      btn.disabled = false;
-      btn.textContent = '加入';
+      btn.disabled = false; btn.textContent = '加入';
     }
   }
 
-  /** 复制房间号 */
   function handleCopyRoom() {
     const roomId = P2P.getRoomId();
     if (roomId && navigator.clipboard) {
-      navigator.clipboard.writeText(roomId).then(() => {
-        UI.showToast('房间号已复制！');
-      }).catch(() => {
-        UI.showToast('房间号：' + roomId);
-      });
+      navigator.clipboard.writeText(roomId).then(() => UI.showToast('房间号已复制！')).catch(() => UI.showToast('房间号：' + roomId));
     }
   }
 
-  /** 从剪贴板粘贴房间号 */
   async function handlePasteRoom() {
     try {
-      if (!navigator.clipboard) {
-        UI.showToast('当前浏览器不支持剪贴板');
-        return;
-      }
+      if (!navigator.clipboard) { UI.showToast('当前浏览器不支持剪贴板'); return; }
       const text = await navigator.clipboard.readText();
-      if (text) {
-        UI.getElement('input-room-id').value = text.trim();
-        UI.showToast('已粘贴！');
-      } else {
-        UI.showToast('剪贴板为空');
-      }
-    } catch (err) {
-      // 部分浏览器需要用户手势 + 安全上下文才能读剪贴板
-      UI.showToast('无法读取剪贴板，请手动长按粘贴');
-    }
+      if (text) { UI.getElement('input-room-id').value = text.trim(); UI.showToast('已粘贴！'); }
+      else UI.showToast('剪贴板为空');
+    } catch { UI.showToast('无法读取剪贴板，请手动长按粘贴'); }
   }
 
-  /** P2P 连接成功 */
   function onP2PConnected() {
     const { isHost } = P2P.getStatus();
-
-    // 房主执黑先手，加入者执白
     onlinePlayerColor = isHost ? Board.BLACK : Board.WHITE;
     isMyTurn = (onlinePlayerColor === Board.BLACK);
-
     currentMode = MODE.ONLINE;
     gameOver = false;
+    pendingRequest = null;
     Board.reset();
     UI.clearHighlight();
+    UI.clearWinLine();
     UI.hideWin();
+    UI.hideRequest();
+    UI.setHint('');
     UI.showScreen('game');
-    UI.resizeCanvas();  // 界面可见后计算 Canvas 尺寸
-    updateGameStatus();
+    UI.resizeCanvas();
+    updatePlayerCards();
+    UI.setMoveCount(1);
     UI.showToast('连接成功！' + (isHost ? '你执黑先行' : '你执白，等待对手'));
+    startTimer(Board.BLACK); // 黑方先
   }
 
-  /** P2P 断开连接 */
   function onP2PDisconnected() {
     if (currentMode === MODE.ONLINE && !gameOver) {
       UI.showToast('对手已断开连接', 3000);
       gameOver = true;
+      stopTimer();
     }
   }
 
-  /** P2P 收到落子 */
-  function onP2PMove(x, y) {
-    if (gameOver) return;
-
-    // 处理重新开始信号（不通知对方，避免循环）
-    if (x === 'restart') {
-      restartGame(false);
+  function onP2PMove(type, arg) {
+    if (type === 'restart') {
+      // 旧的直接重启信号（废弃，现在用 rematch_request）
       return;
     }
 
-    // 对方落子
-    if (!Board.placeStone(x, y)) return;
+    // 悔棋申请
+    if (type === 'undo_request') {
+      if (gameOver) { P2P.sendUndoResponse(false); return; }
+      UI.showRequest('对手申请悔棋，是否同意？');
+      pendingRequest = 'undo_request_received';
+      return;
+    }
 
-    UI.setHighlight(x, y);
-    const winner = Board.checkWin(x, y);
+    // 悔棋响应
+    if (type === 'undo_response') {
+      pendingRequest = null;
+      if (arg) {
+        doOnlineUndo();
+        UI.showToast('对手同意了悔棋');
+      } else {
+        UI.showToast('对手拒绝了悔棋');
+      }
+      return;
+    }
+
+    // 重来申请
+    if (type === 'rematch_request') {
+      UI.showRequest('对手申请重新开始，是否同意？');
+      pendingRequest = 'rematch_request_received';
+      return;
+    }
+
+    // 重来响应
+    if (type === 'rematch_response') {
+      pendingRequest = null;
+      if (arg) {
+        UI.showToast('对手同意了，游戏重新开始！');
+        startGame(MODE.ONLINE);
+      } else {
+        UI.showToast('对手拒绝了重来请求');
+      }
+      return;
+    }
+
+    // 普通落子
+    if (gameOver) return;
+    if (!Board.placeStone(type, arg)) return;
+
+    UI.setHighlight(type, arg);
+    UI.setMoveCount(Board.getState().history.length);
+    const winner = Board.checkWin(type, arg);
 
     if (winner) {
       gameOver = true;
+      stopTimer();
+      updatePlayerCards();
+      UI.setWinLine(type, arg, winner);
       setTimeout(() => UI.showWin(winner, true), 300);
       return;
     }
-
     if (Board.isDraw()) {
       gameOver = true;
+      stopTimer();
+      updatePlayerCards();
       setTimeout(() => UI.showWin(null, true), 300);
       return;
     }
 
     Board.switchPlayer();
     isMyTurn = true;
-    updateGameStatus();
+    updatePlayerCards();
+    startTimer(Board.getCurrentPlayer());
   }
 
-  /** P2P 错误 */
-  function onP2PError(msg) {
-    UI.showToast(msg, 4000);
-  }
+  function onP2PError(msg) { UI.showToast(msg, 4000); }
 
-  /** 检查 URL 参数中的房间号 */
-  function checkURLParams() {
-    const params = new URLSearchParams(location.search);
-    const room = params.get('room');
-    if (room) {
-      UI.getElement('input-room-id').value = room;
-      showOnlineScreen();
-      // 自动加入
-      setTimeout(() => handleJoinRoom(), 500);
+  /** 同意请求 */
+  function acceptRequest() {
+    UI.hideRequest();
+    if (pendingRequest === 'undo_request_received') {
+      P2P.sendUndoResponse(true);
+      doOnlineUndo();
+      pendingRequest = null;
+    } else if (pendingRequest === 'rematch_request_received') {
+      P2P.sendRematchResponse(true);
+      pendingRequest = null;
+      startGame(MODE.ONLINE);
     }
+  }
+
+  /** 拒绝请求 */
+  function rejectRequest() {
+    UI.hideRequest();
+    if (pendingRequest === 'undo_request_received') {
+      P2P.sendUndoResponse(false);
+    } else if (pendingRequest === 'rematch_request_received') {
+      P2P.sendRematchResponse(false);
+    }
+    pendingRequest = null;
+  }
+
+  // ==================== 其他 ====================
+
+  function confirmBack() {
+    stopTimer();
+    if (currentMode === MODE.ONLINE) P2P.disconnect();
+    gameOver = false; aiThinking = false;
+    Board.reset(); UI.clearHighlight(); UI.clearWinLine(); UI.hideWin(); UI.hideRequest();
+    UI.showScreen('menu');
+  }
+
+  function goToMenu() {
+    stopTimer();
+    if (currentMode === MODE.ONLINE) P2P.disconnect();
+    gameOver = false; aiThinking = false;
+    Board.reset(); UI.clearHighlight(); UI.clearWinLine(); UI.hideWin(); UI.hideRequest();
+    UI.showScreen('menu');
+  }
+
+  function checkURLParams() {
+    const room = new URLSearchParams(location.search).get('room');
+    if (room) { UI.getElement('input-room-id').value = room; showOnlineScreen(); setTimeout(() => handleJoinRoom(), 500); }
   }
 
   return { init };
 })();
 
-// 启动应用
-document.addEventListener('DOMContentLoaded', () => {
-  Main.init();
-});
+document.addEventListener('DOMContentLoaded', () => Main.init());
