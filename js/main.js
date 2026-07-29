@@ -28,6 +28,10 @@ const Main = (() => {
   // 联机请求状态（防止重复弹窗）
   let pendingRequest = null; // 'undo' | 'rematch' | null
 
+  // 屏幕唤醒锁（防止联机时后台被系统挂起）
+  let wakeLock = null;
+  let wakeLockSupported = false;
+
   /** 初始化 */
   function init() {
     UI.init(Board);
@@ -37,9 +41,61 @@ const Main = (() => {
     UI.getElement('btn-to-menu').addEventListener('click', goToMenu);
     UI.getElement('btn-request-accept').addEventListener('click', () => acceptRequest());
     UI.getElement('btn-request-reject').addEventListener('click', () => rejectRequest());
+
+    // 检测 Wake Lock 支持
+    wakeLockSupported = 'wakeLock' in navigator;
+    // 页面可见性变化检测（后台切前台时检查连接状态）
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
     checkURLParams();
     UI.showScreen('menu');
     console.log('[Main] 五子棋已就绪');
+  }
+
+  // ==================== 防后台断线 ====================
+
+  async function requestWakeLock() {
+    if (!wakeLockSupported || wakeLock) return;
+    try {
+      wakeLock = await navigator.wakeLock.request('screen');
+      console.log('[Main] Wake Lock 已激活');
+      wakeLock.addEventListener('release', () => {
+        console.log('[Main] Wake Lock 已释放');
+        wakeLock = null;
+      });
+    } catch (e) {
+      // 用户拒绝或系统不支持，静默忽略
+      console.log('[Main] Wake Lock 请求失败:', e.message);
+    }
+  }
+
+  async function releaseWakeLock() {
+    if (wakeLock) {
+      try { await wakeLock.release(); } catch (e) { /* ignore */ }
+      wakeLock = null;
+    }
+  }
+
+  function onVisibilityChange() {
+    if (document.hidden) {
+      // 切换到后台时提示
+      if (currentMode === MODE.ONLINE && !gameOver) {
+        UI.showToast('⚠️ 已切到后台，请尽快返回以免断线', 4000);
+      }
+      // 释放唤醒锁（让系统正常休眠）
+      releaseWakeLock();
+    } else {
+      // 回到前台时重新获取唤醒锁
+      if (currentMode === MODE.ONLINE && !gameOver) {
+        requestWakeLock();
+        // 检查连接是否还在
+        if (!P2P.getStatus().isConnected) {
+          UI.showToast('连接已断开，请重新开始', 4000);
+          gameOver = true;
+          stopTimer();
+        }
+      }
+    }
   }
 
   function bindButtons() {
@@ -140,6 +196,11 @@ const Main = (() => {
     // 人机模式不计时，其余模式黑方启动计时
     if (currentMode !== MODE.AI_EASY && currentMode !== MODE.AI_MEDIUM) {
       startTimer(Board.BLACK);
+    }
+
+    // 联机模式申请唤醒锁（防止后台断线）
+    if (currentMode === MODE.ONLINE) {
+      requestWakeLock();
     }
   }
 
@@ -367,7 +428,16 @@ const Main = (() => {
 
   function handlePlayAgain() {
     if (currentMode === MODE.ONLINE) {
-      // 联机：发送重来申请
+      // 如果对手已经发来申请，直接同意（省去重复弹窗）
+      if (pendingRequest === 'rematch_request_received') {
+        acceptRequest();
+        return;
+      }
+      // 如果自己已经发过申请，不重复发送
+      if (pendingRequest === 'rematch') {
+        UI.showToast('已发送重来申请，等待回复…');
+        return;
+      }
       P2P.sendRematchRequest();
       pendingRequest = 'rematch';
       UI.hideWin();
@@ -460,9 +530,13 @@ const Main = (() => {
     UI.setMoveCount(1);
     UI.showToast('连接成功！' + (isHost ? '你执黑先行' : '你执白，等待对手'));
     startTimer(Board.BLACK); // 黑方先
+
+    // ★ 联机开始，申请唤醒锁防止后台断线
+    requestWakeLock();
   }
 
   function onP2PDisconnected() {
+    releaseWakeLock();
     if (currentMode === MODE.ONLINE && !gameOver) {
       UI.showToast('对手已断开连接', 3000);
       gameOver = true;
@@ -498,22 +572,38 @@ const Main = (() => {
 
     // 重来申请
     if (type === 'rematch_request') {
-      UI.showRequest('对手申请重新开始，是否同意？');
-      pendingRequest = 'rematch_request_received';
+      if (pendingRequest === 'rematch') {
+        // ★ 双方同时申请重来 → 自动同意，避免弹两个窗
+        P2P.sendRematchResponse(true);
+        onlinePlayerColor = onlinePlayerColor === Board.BLACK ? Board.WHITE : Board.BLACK;
+        UI.showToast('双方都想重来，游戏重新开始！');
+        startGame(MODE.ONLINE);
+        pendingRequest = null;
+        return;
+      }
+      if (gameOver) {
+        UI.showRequest('对手申请重新开始，是否同意？');
+        pendingRequest = 'rematch_request_received';
+      } else {
+        // 新游戏已开始（我方先收到了对方的 rematch_response），补充回应
+        P2P.sendRematchResponse(true);
+      }
       return;
     }
 
     // 重来响应
     if (type === 'rematch_response') {
-      pendingRequest = null;
-      if (arg) {
-        // 每局交换先手权（双方都执行，保持一致）
+      if (arg && pendingRequest === 'rematch') {
+        // 正常单向申请流程：对方同意
         onlinePlayerColor = onlinePlayerColor === Board.BLACK ? Board.WHITE : Board.BLACK;
         UI.showToast('对手同意了，游戏重新开始！');
         startGame(MODE.ONLINE);
-      } else {
+      } else if (arg && pendingRequest === null) {
+        // ★ 双方同时申请的交叉响应，已在上面的自动同意中处理，忽略
+      } else if (!arg) {
         UI.showToast('对手拒绝了重来请求');
       }
+      pendingRequest = null;
       return;
     }
 
@@ -584,6 +674,7 @@ const Main = (() => {
       if (!confirm('确定要退出当前对局吗？')) return;
     }
     stopTimer();
+    releaseWakeLock();
     if (currentMode === MODE.ONLINE) P2P.disconnect();
     gameOver = false; aiThinking = false;
     Board.reset(); UI.clearHighlight(); UI.clearWinLine(); UI.hideWin(); UI.hideRequest();
@@ -592,6 +683,7 @@ const Main = (() => {
 
   function goToMenu() {
     stopTimer();
+    releaseWakeLock();
     if (currentMode === MODE.ONLINE) P2P.disconnect();
     gameOver = false; aiThinking = false;
     Board.reset(); UI.clearHighlight(); UI.clearWinLine(); UI.hideWin(); UI.hideRequest();
