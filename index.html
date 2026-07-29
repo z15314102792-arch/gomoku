@@ -79,7 +79,8 @@
         <h3>加入房间</h3>
         <p class="online-desc">输入朋友分享的房间号</p>
         <div class="join-form">
-          <input type="text" id="input-room-id" placeholder="输入房间号" maxlength="20" autocomplete="off">
+          <input type="text" id="input-room-id" placeholder="输入或粘贴房间号" maxlength="40" autocomplete="off">
+          <button id="btn-paste-room" class="btn btn-small btn-secondary" title="从剪贴板粘贴">📋</button>
           <button id="btn-join-room" class="btn btn-accent">加入</button>
         </div>
         <p id="join-error" class="error-text hidden"></p>

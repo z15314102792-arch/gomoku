@@ -60,6 +60,7 @@ const Main = (() => {
     UI.getElement('btn-create-room').addEventListener('click', handleCreateRoom);
     UI.getElement('btn-join-room').addEventListener('click', handleJoinRoom);
     UI.getElement('btn-copy-room').addEventListener('click', handleCopyRoom);
+    UI.getElement('btn-paste-room').addEventListener('click', handlePasteRoom);
   }
 
   /** 开始游戏 */
@@ -248,6 +249,14 @@ const Main = (() => {
     UI.getElement('input-room-id').value = '';
     UI.getElement('join-error').classList.add('hidden');
 
+    // 重置按钮状态（防止上次操作残留的 disabled/文字）
+    const createBtn = UI.getElement('btn-create-room');
+    createBtn.disabled = false;
+    createBtn.textContent = '创建房间';
+    const joinBtn = UI.getElement('btn-join-room');
+    joinBtn.disabled = false;
+    joinBtn.textContent = '加入';
+
     // 初始化 P2P
     P2P.init({
       onConnected: onP2PConnected,
@@ -310,6 +319,26 @@ const Main = (() => {
       }).catch(() => {
         UI.showToast('房间号：' + roomId);
       });
+    }
+  }
+
+  /** 从剪贴板粘贴房间号 */
+  async function handlePasteRoom() {
+    try {
+      if (!navigator.clipboard) {
+        UI.showToast('当前浏览器不支持剪贴板');
+        return;
+      }
+      const text = await navigator.clipboard.readText();
+      if (text) {
+        UI.getElement('input-room-id').value = text.trim();
+        UI.showToast('已粘贴！');
+      } else {
+        UI.showToast('剪贴板为空');
+      }
+    } catch (err) {
+      // 部分浏览器需要用户手势 + 安全上下文才能读剪贴板
+      UI.showToast('无法读取剪贴板，请手动长按粘贴');
     }
   }
 
