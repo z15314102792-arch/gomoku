@@ -5,7 +5,7 @@
  * 使用 Date.now() 计算实际流逝时间，避免 setInterval 漂移。
  */
 const Main = (() => {
-  const MOVE_TIME = 30; // 秒
+  const MOVE_TIME = 60; // 秒（每步限时）
 
   const MODE = {
     LOCAL: 'local',
@@ -71,7 +71,7 @@ const Main = (() => {
       const sec = remaining % 60;
       const str = min + ':' + String(sec).padStart(2, '0');
       UI.updateTimerDisplay(player, str);
-      UI.setTimerUrgent(player, remaining <= 10 && remaining > 0);
+      UI.setTimerUrgent(player, remaining <= 20 && remaining > 0);
 
       if (remaining <= 0) {
         handleTimeout(player);
@@ -128,12 +128,19 @@ const Main = (() => {
     UI.showScreen('game');
     UI.resizeCanvas();
 
-    isMyTurn = true;
+    // 联机模式下回合取决于我方颜色（黑先白后）
+    if (currentMode === MODE.ONLINE) {
+      isMyTurn = (onlinePlayerColor === Board.BLACK);
+    } else {
+      isMyTurn = true;
+    }
     updatePlayerCards();
     UI.setMoveCount(1);
 
-    // 黑方先手，启动黑方计时
-    startTimer(Board.BLACK);
+    // 人机模式不计时，其余模式黑方启动计时
+    if (currentMode !== MODE.AI_EASY && currentMode !== MODE.AI_MEDIUM) {
+      startTimer(Board.BLACK);
+    }
   }
 
   /** 更新双方玩家卡片 */
@@ -142,6 +149,19 @@ const Main = (() => {
     const wName = getPlayerName(Board.WHITE);
     const activePlayer = gameOver ? null : Board.getCurrentPlayer();
     UI.setPlayerCards(bName, formatTime(MOVE_TIME), wName, formatTime(MOVE_TIME), activePlayer);
+
+    // 更新悔棋按钮状态（无可悔时禁用）
+    const historyLen = Board.getState().history.length;
+    const canUndo = !gameOver && !aiThinking && historyLen > 0;
+    if (currentMode === MODE.ONLINE) {
+      // 联机模式：只有自己回合且有待悔的棋时才能申请
+      UI.getElement('btn-undo').disabled = !(canUndo && isMyTurn);
+    } else if (currentMode === MODE.AI_EASY || currentMode === MODE.AI_MEDIUM) {
+      // AI 模式：需要至少 2 手历史
+      UI.getElement('btn-undo').disabled = !(canUndo && historyLen >= 2);
+    } else {
+      UI.getElement('btn-undo').disabled = !canUndo;
+    }
   }
 
   function getPlayerName(player) {
@@ -205,14 +225,18 @@ const Main = (() => {
     Board.switchPlayer();
     updatePlayerCards();
 
-    // 重启对方计时器
-    if (!gameOver) startTimer(Board.getCurrentPlayer());
+    // 重启对方计时器（人机模式不计时，跳过）
+    const isAI = (currentMode === MODE.AI_EASY || currentMode === MODE.AI_MEDIUM);
+    if (!gameOver && !isAI) startTimer(Board.getCurrentPlayer());
 
     // AI 模式
-    if (!gameOver && (currentMode === MODE.AI_EASY || currentMode === MODE.AI_MEDIUM)) {
+    if (!gameOver && isAI) {
       aiThinking = true;
       const difficulty = currentMode === MODE.AI_EASY ? 'normal' : 'hard';
-      stopTimer(); // AI 思考期间暂停计时
+      const diffLabel = currentMode === MODE.AI_EASY ? '简单' : '中等';
+      UI.setHint('AI 思考中（' + diffLabel + '）…');
+      // 模拟人类思考：随机 0.8~3 秒
+      const thinkTime = 800 + Math.random() * 2200;
       setTimeout(() => {
         const move = AI.getMove(Board, difficulty);
         if (move) {
@@ -235,11 +259,12 @@ const Main = (() => {
           } else {
             Board.switchPlayer();
             updatePlayerCards();
-            startTimer(Board.getCurrentPlayer()); // 恢复玩家计时
+            // 人机模式不计时，无需重启
           }
         }
+        UI.setHint('');
         aiThinking = false;
-      }, 1000);
+      }, thinkTime);
     }
 
     // 联机模式：切换回合
@@ -550,6 +575,10 @@ const Main = (() => {
   // ==================== 其他 ====================
 
   function confirmBack() {
+    // 游戏中离开需确认
+    if (!gameOver && Board.getState().history.length > 0) {
+      if (!confirm('确定要退出当前对局吗？')) return;
+    }
     stopTimer();
     if (currentMode === MODE.ONLINE) P2P.disconnect();
     gameOver = false; aiThinking = false;

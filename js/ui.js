@@ -14,7 +14,8 @@ const UI = (() => {
   // 绘制参数
   let cellSize = 0, padding = 20, boardPixelSize = 0;
   let lastHighlight = null;
-  let winLine = null; // {x1,y1,x2,y2} 胜利连线坐标
+  let winLine = null;      // {x1,y1,x2,y2} 胜利连线坐标
+  let previewPos = null;   // {x,y} 落子预览（防误触，需双击确认）
 
   /** 初始化 */
   function init(boardModule) {
@@ -107,6 +108,25 @@ const UI = (() => {
       for (let x = 0; x < size; x++)
         if (grid[y][x] !== board.EMPTY) drawStone(x, y, grid[y][x]);
 
+    // 落子预览（半透明，防误触提示）
+    if (previewPos && !lastHighlight) {
+      const px = p + previewPos.x * s, py = p + previewPos.y * s, r = s * 0.44;
+      const player = board.getCurrentPlayer();
+      ctx.save(); ctx.globalAlpha = 0.45;
+      if (player === board.BLACK) {
+        ctx.fillStyle = '#333';
+      } else {
+        ctx.fillStyle = '#ddd';
+      }
+      ctx.beginPath(); ctx.arc(px, py, r, 0, Math.PI*2); ctx.fill();
+      // 外圈虚线提示
+      ctx.strokeStyle = player === board.BLACK ? '#fff' : '#333';
+      ctx.lineWidth = 2; ctx.setLineDash([3, 3]);
+      ctx.beginPath(); ctx.arc(px, py, r + 2, 0, Math.PI*2); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
+
     // 最后落子高亮
     if (lastHighlight) {
       const px = p + lastHighlight.x * s, py = p + lastHighlight.y * s;
@@ -144,9 +164,30 @@ const UI = (() => {
     ctx.restore();
   }
 
-  /** Canvas 点击处理 */
-  function handleCanvasClick(e) { const p = getGridPos(e); if (p) handleMove(p.x, p.y); }
-  function handleCanvasTouch(e) { e.preventDefault(); const p = getGridPos(e.touches[0]); if (p) handleMove(p.x, p.y); }
+  /** Canvas 点击处理 —— 第一下预览，第二下确认 */
+  function handleCanvasClick(e) { processTap(e); }
+  function handleCanvasTouch(e) { e.preventDefault(); processTap(e.touches[0]); }
+
+  function processTap(e) {
+    const p = getGridPos(e);
+    if (!p) { clearPreview(); return; }
+
+    // 检查该位置是否已有棋子
+    if (board.get(p.x, p.y) !== board.EMPTY) { clearPreview(); return; }
+
+    // 如果和预览位置相同 → 确认落子
+    if (previewPos && previewPos.x === p.x && previewPos.y === p.y) {
+      clearPreview();
+      handleMove(p.x, p.y);
+      return;
+    }
+
+    // 否则 → 设置预览
+    previewPos = { x: p.x, y: p.y };
+    draw();
+  }
+
+  function clearPreview() { previewPos = null; }
 
   function getGridPos(e) {
     const rect = canvas.getBoundingClientRect();
@@ -164,8 +205,8 @@ const UI = (() => {
   function handleMove(x, y) { if (onMoveCallback) onMoveCallback(x, y); }
 
   /** 棋子高亮与胜利连线 */
-  function setHighlight(x, y) { lastHighlight = { x, y }; draw(); }
-  function clearHighlight() { lastHighlight = null; draw(); }
+  function setHighlight(x, y) { lastHighlight = { x, y }; previewPos = null; draw(); }
+  function clearHighlight() { lastHighlight = null; previewPos = null; draw(); }
 
   /** 设置并绘制胜利连线 */
   function setWinLine(x, y, player) {
@@ -275,7 +316,7 @@ const UI = (() => {
 
   return {
     init, draw, showScreen, resizeCanvas,
-    setHighlight, clearHighlight, setWinLine, clearWinLine,
+    setHighlight, clearHighlight, clearPreview, setWinLine, clearWinLine,
     setPlayerCards, updateTimerDisplay, setTimerUrgent,
     setMoveCount, setHint,
     showWin, hideWin, showRequest, hideRequest,
