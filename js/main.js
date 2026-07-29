@@ -209,7 +209,7 @@ const Main = (() => {
       stopTimer();
       updatePlayerCards();
       UI.setWinLine(x, y, winner);
-      setTimeout(() => UI.showWin(winner, currentMode === MODE.ONLINE), 300);
+      setTimeout(() => UI.showWin(winner, currentMode === MODE.ONLINE), 1500);
       return true;
     }
 
@@ -217,7 +217,7 @@ const Main = (() => {
       gameOver = true;
       stopTimer();
       updatePlayerCards();
-      setTimeout(() => UI.showWin(null, false), 300);
+      setTimeout(() => UI.showWin(null, false), 1500);
       return true;
     }
 
@@ -250,12 +250,12 @@ const Main = (() => {
             stopTimer();
             updatePlayerCards();
             UI.setWinLine(move.x, move.y, aiWinner);
-            setTimeout(() => UI.showWin(aiWinner, false), 300);
+            setTimeout(() => UI.showWin(aiWinner, false), 1500);
           } else if (Board.isDraw()) {
             gameOver = true;
             stopTimer();
             updatePlayerCards();
-            setTimeout(() => UI.showWin(null, false), 300);
+            setTimeout(() => UI.showWin(null, false), 1500);
           } else {
             Board.switchPlayer();
             updatePlayerCards();
@@ -528,14 +528,14 @@ const Main = (() => {
       stopTimer();
       updatePlayerCards();
       UI.setWinLine(type, arg, winner);
-      setTimeout(() => UI.showWin(winner, true), 300);
+      setTimeout(() => UI.showWin(winner, true), 1500);
       return;
     }
     if (Board.isDraw()) {
       gameOver = true;
       stopTimer();
       updatePlayerCards();
-      setTimeout(() => UI.showWin(null, true), 300);
+      setTimeout(() => UI.showWin(null, true), 1500);
       return;
     }
 

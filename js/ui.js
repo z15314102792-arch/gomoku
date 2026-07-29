@@ -109,7 +109,7 @@ const UI = (() => {
         if (grid[y][x] !== board.EMPTY) drawStone(x, y, grid[y][x]);
 
     // 落子预览（半透明，防误触提示）
-    if (previewPos && !lastHighlight) {
+    if (previewPos) {
       const px = p + previewPos.x * s, py = p + previewPos.y * s, r = s * 0.44;
       const player = board.getCurrentPlayer();
       ctx.save(); ctx.globalAlpha = 0.45;
@@ -209,23 +209,25 @@ const UI = (() => {
   function clearHighlight() { lastHighlight = null; previewPos = null; draw(); }
 
   /** 设置并绘制胜利连线 */
+  /** 设置胜利连线：从五连两端点画线（修正对角线坐标错位） */
   function setWinLine(x, y, player) {
-    const grid = board.getState().grid;
     const dirs = [[1,0],[0,1],[1,1],[1,-1]];
     for (const [dx,dy] of dirs) {
-      let minX = x, maxX = x, minY = y, maxY = y;
+      let ex1 = x, ey1 = y, ex2 = x, ey2 = y, count = 1;
+      // 正方向找端点
       for (let i = 1; i < 5; i++) {
         const nx = x + dx*i, ny = y + dy*i;
-        if (board.get(nx, ny) === player) { minX = Math.min(minX,nx); maxX = Math.max(maxX,nx); minY = Math.min(minY,ny); maxY = Math.max(maxY,ny); }
+        if (board.get(nx, ny) === player) { count++; ex1 = nx; ey1 = ny; }
         else break;
       }
+      // 反方向找端点
       for (let i = 1; i < 5; i++) {
         const nx = x - dx*i, ny = y - dy*i;
-        if (board.get(nx, ny) === player) { minX = Math.min(minX,nx); maxX = Math.max(maxX,nx); minY = Math.min(minY,ny); maxY = Math.max(maxY,ny); }
+        if (board.get(nx, ny) === player) { count++; ex2 = nx; ey2 = ny; }
         else break;
       }
-      if (maxX - minX >= 4 || maxY - minY >= 4 || (maxX-minX)+(maxY-minY) >= 4) {
-        winLine = { x1: minX, y1: minY, x2: maxX, y2: maxY };
+      if (count >= 5) {
+        winLine = { x1: ex2, y1: ey2, x2: ex1, y2: ey1 };
         draw();
         return;
       }
