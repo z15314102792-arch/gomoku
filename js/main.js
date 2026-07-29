@@ -507,6 +507,8 @@ const Main = (() => {
     if (type === 'rematch_response') {
       pendingRequest = null;
       if (arg) {
+        // 每局交换先手权（双方都执行，保持一致）
+        onlinePlayerColor = onlinePlayerColor === Board.BLACK ? Board.WHITE : Board.BLACK;
         UI.showToast('对手同意了，游戏重新开始！');
         startGame(MODE.ONLINE);
       } else {
@@ -557,6 +559,8 @@ const Main = (() => {
     } else if (pendingRequest === 'rematch_request_received') {
       P2P.sendRematchResponse(true);
       pendingRequest = null;
+      // 每局交换先手权
+      onlinePlayerColor = onlinePlayerColor === Board.BLACK ? Board.WHITE : Board.BLACK;
       startGame(MODE.ONLINE);
     }
   }
