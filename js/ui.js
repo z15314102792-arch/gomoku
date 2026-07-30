@@ -31,7 +31,7 @@ const UI = (() => {
       'btn-play-again','btn-to-menu','btn-request-accept','btn-request-reject',
       'black-name','black-timer','white-name','white-timer',
       'black-card','white-card','move-count',
-      'room-id-display','room-info','qr-code','input-room-id',
+      'room-id-display','room-info','input-room-id',
       'join-error','win-modal','win-text','request-modal','request-text',
       'toast','game-hint',
     ];
@@ -300,14 +300,9 @@ const UI = (() => {
   function showRoomInfo(roomId) {
     elements['room-id-display'].textContent = roomId;
     elements['room-info'].classList.remove('hidden');
-    const qr = elements['qr-code']; qr.innerHTML = '';
-    if (typeof QRCode !== 'undefined') {
-      new QRCode(qr, { text: location.origin + location.pathname + '?room=' + roomId, width: 140, height: 140, colorDark: '#1a1a2e', colorLight: '#ffffff' });
-    }
   }
   function hideRoomInfo() {
     elements['room-info'].classList.add('hidden');
-    elements['qr-code'].innerHTML = '';
   }
   function showJoinError(msg) {
     const el = elements['join-error']; el.textContent = msg; el.classList.remove('hidden');
