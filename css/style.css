@@ -128,8 +128,6 @@ html, body {
 .room-info { margin-top: 16px; padding: 16px; background: var(--bg-card); border-radius: 14px; }
 .room-info p { margin-bottom: 10px; }
 #room-id-display { font-size: 1.3rem; color: var(--primary); letter-spacing: 2px; }
-.qr-code { display: flex; justify-content: center; margin: 12px 0; }
-.qr-code canvas, .qr-code img { border-radius: 8px; background: #fff; padding: 6px; }
 .waiting-text { color: var(--text-muted); animation: pulse 1.5s ease-in-out infinite; }
 @keyframes pulse { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
 .error-text { color: var(--primary); font-size: 0.85rem; margin-top: 8px; }
