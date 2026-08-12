@@ -1,0 +1,48 @@
+{
+  "project": "五子棋",
+  "version": "v1.3",
+  "timestamp": "2026-08-11T11:38:33.685Z",
+  "checks": [
+    {
+      "name": "入口文件存在",
+      "pass": true,
+      "data": {
+        "size_bytes": 5223,
+        "lines": 150
+      }
+    },
+    {
+      "name": "JS 语法正确",
+      "pass": true,
+      "data": {
+        "code_size": 48000
+      }
+    },
+    {
+      "name": "五子棋核心逻辑",
+      "pass": true,
+      "data": {
+        "found": [
+          "胜负判定",
+          "棋盘数据结构",
+          "落子交互",
+          "悔棋",
+          "重置功能"
+        ]
+      }
+    },
+    {
+      "name": "测试文件语法",
+      "pass": true,
+      "data": {
+        "file": "test-board.js",
+        "size": 6697
+      }
+    }
+  ],
+  "summary": {
+    "total": 4,
+    "passed": 4,
+    "failed": 0
+  }
+}
